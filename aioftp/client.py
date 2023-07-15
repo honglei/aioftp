@@ -133,7 +133,7 @@ class BaseClient:
     ):
         self.socket_timeout: float | int | None = socket_timeout
         self.connection_timeout: float | int | None = connection_timeout
-        self.throttle: StreamThrottle = StreamThrottle.from_limits(
+        self.throttle: StreamThrottle = StreamThrottle(
             read_speed_limit,
             write_speed_limit,
         )

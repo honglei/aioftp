@@ -416,31 +416,9 @@ class Throttle:
         )
 
 
-class StreamThrottle(collections.namedtuple("StreamThrottle", "read write")):
+class StreamThrottle:
     """
     Stream throttle with `read` and `write` :py:class:`aioftp.Throttle`
-
-    :param read: stream read throttle
-    :type read: :py:class:`aioftp.Throttle`
-
-    :param write: stream write throttle
-    :type write: :py:class:`aioftp.Throttle`
-    """
-
-    def clone(self):
-        """
-        Clone throttles without memory
-        """
-        return StreamThrottle(read=self.read.clone(), write=self.write.clone())
-
-    @classmethod
-    def from_limits(
-        cls,
-        read_speed_limit: int | None = None,
-        write_speed_limit: int | None = None,
-    ) -> "StreamThrottle":
-        """
-        Simple wrapper for creation :py:class:`aioftp.StreamThrottle`
 
         :param read_speed_limit: stream read speed limit in bytes or
             :py:class:`None` for unlimited
@@ -449,11 +427,17 @@ class StreamThrottle(collections.namedtuple("StreamThrottle", "read write")):
         :param write_speed_limit: stream write speed limit in bytes or
             :py:class:`None` for unlimited
         :type write_speed_limit: :py:class:`int` or :py:class:`None`
+    """
+
+    def __init__(self, read_speed_limit: int, write_speed_limit: int):
+        self.read: Throttle = Throttle(limit=read_speed_limit)
+        self.write: Throttle = Throttle(limit=write_speed_limit)
+
+    def clone(self):
         """
-        return cls(
-            read=Throttle(limit=read_speed_limit),
-            write=Throttle(limit=write_speed_limit),
-        )
+        Clone throttles without memory
+        """
+        return StreamThrottle(read=self.read.clone(), write=self.write.clone())
 
 
 class ThrottleStreamIO(StreamIO):
@@ -485,7 +469,7 @@ class ThrottleStreamIO(StreamIO):
 
     def __init__(self, *args, throttles={}, **kwargs):
         super().__init__(*args, **kwargs)
-        self.throttles = throttles
+        self.throttles: dict[str, StreamThrottle] = throttles
 
     async def wait(self, name: str):
         """
@@ -545,7 +529,7 @@ class ThrottleStreamIO(StreamIO):
         self.append("read", data, start)
         return data
 
-    async def write(self, data):
+    async def write(self, data: bytes) -> None:
         """
         :py:func:`asyncio.coroutine`
 
@@ -562,7 +546,7 @@ class ThrottleStreamIO(StreamIO):
     async def __aexit__(self, *args):
         self.close()
 
-    def iter_by_line(self):
+    def iter_by_line(self) -> AsyncStreamIterator:
         """
         Read/iterate stream by line.
 
@@ -575,7 +559,7 @@ class ThrottleStreamIO(StreamIO):
         """
         return AsyncStreamIterator(self.readline)
 
-    def iter_by_block(self, count=DEFAULT_BLOCK_SIZE):
+    def iter_by_block(self, count: int = DEFAULT_BLOCK_SIZE):
         """
         Read/iterate stream by block.
 
@@ -593,7 +577,7 @@ LOCALE_LOCK = threading.Lock()
 
 
 @contextmanager
-def setlocale(name):
+def setlocale(name: str):
     """
     Context manager with threading lock for set locale on enter, and set it
     back to original state on exit.

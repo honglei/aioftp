@@ -6,11 +6,12 @@ import functools
 import logging
 import os
 import pathlib
+from ssl import SSLContext
 import socket
 import stat
 import time
 from typing import Callable
-from collections.abc import Sequence, Iterator
+from collections.abc import Sequence, Iterator, Coroutine
 
 from . import errors, pathio
 from .common import (
@@ -735,7 +736,7 @@ class Server:
         ipv4_pasv_forced_response_address: str | None = None,
         data_ports: Iterator[int] | None = None,
         encoding: str = "utf-8",
-        ssl=None,
+        ssl: SSLContext | None = None,
     ):
         self.block_size = block_size
         self.socket_timeout = socket_timeout
@@ -760,19 +761,21 @@ class Server:
         else:
             self.user_manager = MemoryUserManager(users)
 
-        self.available_connections = AvailableConnections(maximum_connections)
-        self.throttle = StreamThrottle.from_limits(
+        self.available_connections: AvailableConnections = (
+            AvailableConnections(maximum_connections)
+        )
+        self.throttle: StreamThrottle = StreamThrottle(
             read_speed_limit,
             write_speed_limit,
         )
-        self.throttle_per_connection = StreamThrottle.from_limits(
+        self.throttle_per_connection: StreamThrottle = StreamThrottle(
             read_speed_limit_per_connection,
             write_speed_limit_per_connection,
         )
         self.throttle_per_user: dict[User, StreamThrottle] = {}
-        self.encoding = encoding
-        self.ssl = ssl
-        self.commands_mapping = {
+        self.encoding: str = encoding
+        self.ssl: SSLContext | None = ssl
+        self.commands_mapping: dict[str, Coroutine] = {
             "abor": self.ftp_abor,
             "appe": self.ftp_appe,
             "cdup": self.ftp_cdup,
@@ -800,8 +803,6 @@ class Server:
             "syst": self.ftp_syst,
             "type": self.ftp_type,
             "user": self.ftp_user,
-            
-            
         }
 
     async def start(self, host: str | None = None, port: int = 0, **kwargs):
@@ -1065,7 +1066,7 @@ class Server:
                             asyncio.create_task(self.parse_command(stream))
                         )
                         cmd, rest = result
-                        f = self.commands_mapping.get(cmd)
+                        f: Coroutine = self.commands_mapping.get(cmd)
                         if f is not None:
                             pending.add(
                                 asyncio.create_task(f(connection, rest))
@@ -1175,7 +1176,7 @@ class Server:
         if connection.user is not None:  # connection.future.user.done():
             connection.current_directory = connection.user.home_path
             if connection.user not in self.throttle_per_user:
-                throttle = StreamThrottle.from_limits(
+                throttle = StreamThrottle(
                     connection.user.read_speed_limit,
                     connection.user.write_speed_limit,
                 )
@@ -1183,7 +1184,7 @@ class Server:
 
             connection.command_connection.throttles.update(
                 user_global=self.throttle_per_user[connection.user],
-                user_per_connection=StreamThrottle.from_limits(
+                user_per_connection=StreamThrottle(
                     connection.user.read_speed_limit_per_connection,
                     connection.user.write_speed_limit_per_connection,
                 ),
@@ -1454,7 +1455,7 @@ class Server:
         )
         @worker
         async def stor_worker(self, connection: Connection, rest: str):
-            stream = connection.data_connection
+            stream: ThrottleStreamIO = connection.data_connection
             connection.data_connection = None
             if connection.restart_offset:
                 file_mode = "r+b"
@@ -1497,7 +1498,7 @@ class Server:
         )
         @worker
         async def retr_worker(self, connection: Connection, rest: str):
-            stream = connection.data_connection
+            stream: ThrottleStreamIO = connection.data_connection
             connection.data_connection = None
             file_in = connection.path_io.open(real_path, mode="rb")
             async with file_in, stream:
