@@ -1,12 +1,10 @@
 from __future__ import annotations
 import abc
 import asyncio
-import collections
 import functools
 import locale
 import threading
 from contextlib import contextmanager
-from typing import Optional, Union
 
 __all__ = (
     "with_timeout",
