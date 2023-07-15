@@ -600,7 +600,7 @@ def setlocale(name):
 
     ::
 
-        >> > with setlocale('C'):
+        >>> with setlocale("C"):
         ...     ...
     """
     with LOCALE_LOCK:

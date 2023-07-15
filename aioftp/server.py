@@ -783,6 +783,7 @@ class Server:
             "mkd": self.ftp_mkd,
             "mlsd": self.ftp_mlsd,
             "mlst": self.ftp_mlst,
+            "noop": self.ftp_noop,
             "pass": self.ftp_pass,
             "pasv": self.ftp_pasv,
             "pbsz": self.ftp_pbsz,
@@ -794,12 +795,13 @@ class Server:
             "rmd": self.ftp_rmd,
             "rnfr": self.ftp_rnfr,
             "rnto": self.ftp_rnto,
+            "size": self.ftp_size,
             "stor": self.ftp_stor,
             "syst": self.ftp_syst,
             "type": self.ftp_type,
             "user": self.ftp_user,
-            "size": self.ftp_size,
-            'noop': self.ftp_noop,
+            
+            
         }
 
     async def start(self, host: str | None = None, port: int = 0, **kwargs):
@@ -1431,7 +1433,7 @@ class Server:
         file_size = await connection.path_io.size(real_path)
         connection.response("213", str(file_size))
         return True
-    
+
     @ConnectionConditions(ConnectionConditions.login_required)
     async def ftp_noop(self, connection: Connection, rest: str):
         """Do nothing."""
