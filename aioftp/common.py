@@ -6,6 +6,7 @@ import functools
 import locale
 import threading
 from contextlib import contextmanager
+from typing import Optional, Union
 
 __all__ = (
     "with_timeout",
@@ -176,7 +177,7 @@ class AbstractAsyncLister(AsyncListerMixin, abc.ABC):
     @abc.abstractmethod
     async def __anext__(self):
         """
-        : py: func: `asyncio.coroutine`
+        :py:func:`asyncio.coroutine`
 
         Abstract method
         """
@@ -280,9 +281,9 @@ class StreamIO:
     @with_timeout("read_timeout")
     async def readline(self) -> bytes:
         """
-        : py: func: `asyncio.coroutine`
+        :py:func:`asyncio.coroutine`
 
-        Proxy for: py: meth: `asyncio.StreamReader.readline`.
+        Proxy for :py:meth:`asyncio.StreamReader.readline`.
         """
         return await self.reader.readline()
 
@@ -351,7 +352,7 @@ class Throttle:
 
     async def wait(self):
         """
-        : py: func: `asyncio.coroutine`
+        :py:func:`asyncio.coroutine`
 
         Wait until can do IO
         """
@@ -488,12 +489,12 @@ class ThrottleStreamIO(StreamIO):
 
     async def wait(self, name: str):
         """
-        : py: func: `asyncio.coroutine`
+        :py:func:`asyncio.coroutine`
 
         Wait for all throttles
 
-        : param name: name of throttle to acquire('read' or 'write')
-        : type name: : py: class: `str`
+        :param name: name of throttle to acquire ("read" or "write")
+        :type name: :py:class:`str`
         """
         tasks = []
         for throttle in self.throttles.values():
@@ -522,9 +523,9 @@ class ThrottleStreamIO(StreamIO):
 
     async def read(self, count: int = -1) -> bytes:
         """
-        : py: func: `asyncio.coroutine`
+        :py:func:`asyncio.coroutine`
 
-        : py: meth: `aioftp.StreamIO.read` proxy
+        :py:meth:`aioftp.StreamIO.read` proxy
         """
         await self.wait("read")
         start = _now()
@@ -534,9 +535,9 @@ class ThrottleStreamIO(StreamIO):
 
     async def readline(self) -> bytes:
         """
-        : py: func: `asyncio.coroutine`
+        :py:func:`asyncio.coroutine`
 
-        : py: meth: `aioftp.StreamIO.readline` proxy
+        :py:meth:`aioftp.StreamIO.readline` proxy
         """
         await self.wait("read")
         start = _now()
@@ -574,7 +575,7 @@ class ThrottleStreamIO(StreamIO):
         """
         return AsyncStreamIterator(self.readline)
 
-    def iter_by_block(self, count: int = DEFAULT_BLOCK_SIZE):
+    def iter_by_block(self, count=DEFAULT_BLOCK_SIZE):
         """
         Read/iterate stream by block.
 
@@ -599,7 +600,7 @@ def setlocale(name):
 
     ::
 
-        >>> with setlocale("C"):
+        >> > with setlocale('C'):
         ...     ...
     """
     with LOCALE_LOCK:

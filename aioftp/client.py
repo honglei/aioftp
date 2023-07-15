@@ -7,10 +7,9 @@ import datetime
 import logging
 import pathlib
 import re
-from ssl import SSLContext
 from functools import partial
 
-from typing import Literal, List, Callable
+from typing import Literal, List
 
 from . import errors, pathio
 from .common import (
@@ -125,7 +124,7 @@ class BaseClient:
         path_timeout: float | int | None = None,
         path_io_factory: type[pathio.PathIO] = pathio.PathIO,
         encoding: str = "utf-8",
-        ssl: SSLContext | True | None = None,
+        ssl=None,
         parse_list_line_custom=None,
         parse_list_line_custom_first=True,
         passive_commands=("epsv", "pasv"),
@@ -143,11 +142,11 @@ class BaseClient:
         )
         self.encoding: str = encoding
         self.stream: ThrottleStreamIO | None = None
-        self.ssl: SSLContext | bool | None = ssl
-        self.parse_list_line_custom: Callable | None = parse_list_line_custom
-        self.parse_list_line_custom_first: bool = parse_list_line_custom_first
-        self._passive_commands: tuple[str, ...] = passive_commands
-        self._open_connection: Callable = partial(
+        self.ssl = ssl
+        self.parse_list_line_custom = parse_list_line_custom
+        self.parse_list_line_custom_first = parse_list_line_custom_first
+        self._passive_commands = passive_commands
+        self._open_connection = partial(
             open_connection, ssl=self.ssl, **siosocks_asyncio_kwargs
         )
 
@@ -293,6 +292,7 @@ class BaseClient:
             if expected_codes:
                 self.check_codes(expected_codes, code, info)
             return code, info
+        # return None
 
     @staticmethod
     def parse_epsv_response(s: str) -> tuple[None, int]:
@@ -871,8 +871,8 @@ class Client(BaseClient):
         path = pathlib.PurePosixPath(path)
         try:
             code, info = await self.command("MLST " + str(path), "2xx")
-            name, info = self.parse_mlsx_line(info[1].lstrip())
-            return info
+            name, info_ = self.parse_mlsx_line(info[1].lstrip())
+            return info_
         except errors.StatusCodeError as e:
             if not e.received_codes[-1].matches("50x"):
                 raise
@@ -1165,12 +1165,12 @@ class Client(BaseClient):
         """
         :py:func:`asyncio.coroutine`
 
-        Send "QUIT" and close connection.
+        Send 'QUIT' and close connection.
         """
         await self.command("QUIT", "2xx")
         self.close()
 
-    async def _do_epsv(self):
+    async def _do_epsv(self) -> tuple[None, int]:
         code, info = await self.command("EPSV", "229")
         ip, port = self.parse_epsv_response(info[-1])
         return ip, port
@@ -1180,6 +1180,7 @@ class Client(BaseClient):
         ip, port = self.parse_pasv_response(info[-1])
         return ip, port
 
+    # : list[str] | None
     async def get_passive_connection(
         self,
         conn_type: Literal["I", "A", "E", "L"] = "I",
@@ -1190,7 +1191,7 @@ class Client(BaseClient):
 
         Getting pair of reader, writer for passive connection with server.
 
-        :param conn_type: connection type ("I", "A", "E", "L")
+        :param conn_type: connection type ('I', 'A', 'E', 'L')
         :type conn_type: :py:class:`str`
 
         :param commands: sequence of commands to try to initiate passive

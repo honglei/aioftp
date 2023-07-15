@@ -13,21 +13,6 @@ def test_parse_directory_response():
     parsed = aioftp.Client.parse_directory_response(s)
     assert parsed == pathlib.PurePosixPath('baz " test nop')
 
-
-def test_connection_del_future():
-    loop = asyncio.new_event_loop()
-    c = aioftp.Connection(loop=loop)
-    c.foo = "bar"
-    del c.future.foo
-
-
-def test_connection_not_in_storage():
-    loop = asyncio.new_event_loop()
-    c = aioftp.Connection(loop=loop)
-    with pytest.raises(AttributeError):
-        getattr(c, "foo")
-
-
 def test_available_connections_too_much_acquires():
     ac = aioftp.AvailableConnections(3)
     ac.acquire()
@@ -236,7 +221,13 @@ def test_get_paths_windows_traverse():
     base_path = pathlib.PureWindowsPath("C:\\ftp")
     user = aioftp.User()
     user.base_path = base_path
-    connection = aioftp.Connection(current_directory=base_path, user=user)
+    connection = aioftp.Connection(
+        client_host="localhost",
+        client_port=0,
+        server_host="localhost",
+        passive_server_port=0,
+        server_port=0, 
+        current_directory=base_path, user=user)
     virtual_path = pathlib.PurePosixPath("/foo/C:\\windows")
     real_path, resolved_virtual_path = aioftp.Server.get_paths(
         connection,

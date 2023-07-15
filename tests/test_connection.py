@@ -223,17 +223,17 @@ async def test_long_login_sequence_fail(pair_factory,
     class CustomServer(aioftp.Server):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.commands_mapping["acct"] = self.acct
+            self.commands_mapping["acct"] = self.ftp_acct
 
-        async def user(self, connection, rest):
+        async def ftp_user(self, connection, rest):
             connection.response("331")
             return True
 
-        async def pass_(self, connection, rest):
+        async def ftp_pass(self, connection, rest):
             connection.response("332")
             return True
 
-        async def acct(self, connection, rest):
+        async def ftp_acct(self, connection, rest):
             connection.response("333")
             return True
 

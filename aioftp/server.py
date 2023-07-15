@@ -1,20 +1,5 @@
-from __future__ import annotations
-from .common import (
-    DEFAULT_BLOCK_SIZE,
-    DEFAULT_MAXIMUM_CONNECTIONS,
-    DEFAULT_MAXIMUM_CONNECTIONS_PER_USER,
-    END_OF_LINE,
-    HALF_OF_YEAR_IN_SECONDS,
-    StreamThrottle,
-    ThrottleStreamIO,
-    setlocale,
-    wrap_with_container,
-    StreamIO,
-)
-from . import errors, pathio
 import abc
 import asyncio
-import collections
 import enum
 import errno
 import functools
@@ -27,6 +12,19 @@ import time
 from typing import Callable
 from collections.abc import Sequence, Iterator
 
+from . import errors, pathio
+from .common import (
+    DEFAULT_BLOCK_SIZE,
+    DEFAULT_MAXIMUM_CONNECTIONS,
+    DEFAULT_MAXIMUM_CONNECTIONS_PER_USER,
+    END_OF_LINE,
+    HALF_OF_YEAR_IN_SECONDS,
+    StreamThrottle,
+    ThrottleStreamIO,
+    setlocale,
+    wrap_with_container,
+    StreamIO,
+)
 
 __all__ = (
     "Permission",
@@ -306,83 +304,145 @@ class MemoryUserManager(AbstractUserManager):
         self.available_connections[user].release()
 
 
-class Connection(collections.defaultdict):
-    """
-    Connection state container for transparent work with futures for async
-    wait
+# class Connection(collections.defaultdict):
+# """
+# Connection state container for transparent work with futures for async
+# wait
 
-    :param kwargs: initialization parameters
+# :param kwargs: initialization parameters
 
-    Container based on :py:class:`collections.defaultdict`, which holds
-    :py:class:`asyncio.Future` as default factory. There is two layers of
-    abstraction:
+# Container based on :py:class:`collections.defaultdict`, which holds
+# :py:class:`asyncio.Future` as default factory. There is two layers of
+# abstraction:
 
-    * Low level based on simple dictionary keys to attributes mapping and
-        available at Connection.future.
-    * High level based on futures result and dictionary keys to attributes
-        mapping and available at Connection.
+# * Low level based on simple dictionary keys to attributes mapping and
+# available at Connection.future.
+# * High level based on futures result and dictionary keys to attributes
+# mapping and available at Connection.
 
-    To clarify, here is groups of equal expressions
-    ::
+# To clarify, here is groups of equal expressions
+# ::
 
-        >>> connection.future.foo
-        >>> connection["foo"]
+# >>> connection.future.foo
+# >>> connection["foo"]
 
-        >>> connection.foo
-        >>> connection["foo"].result()
+# >>> connection.foo
+# >>> connection["foo"].result()
 
-        >>> del connection.future.foo
-        >>> del connection.foo
-        >>> del connection["foo"]
-    """
+# >>> del connection.future.foo
+# >>> del connection.foo
+# >>> del connection["foo"]
+# """
 
-    __slots__ = ("future",)
+# __slots__ = ("future",)
 
-    class Container:
-        def __init__(self, storage):
-            self.storage = storage
+# class Container:
 
-        def __getattr__(self, name):
-            return self.storage[name]
+# def __init__(self, storage):
+# self.storage = storage
 
-        def __delattr__(self, name):
-            self.storage.pop(name)
+# def __getattr__(self, name):
+# return self.storage[name]
 
-    def __init__(self, **kwargs):
-        super().__init__(asyncio.Future)
-        self.future = Connection.Container(self)
-        for k, v in kwargs.items():
-            self[k].set_result(v)
+# def __delattr__(self, name):
+# self.storage.pop(name)
 
-    def __getattr__(self, name):
-        if name in self:
-            return self[name].result()
-        else:
-            raise AttributeError(f"{name!r} not in storage")
+# def __init__(self, **kwargs):
+# super().__init__(asyncio.Future)
+# self.future = Connection.Container(self)
+# for k, v in kwargs.items():
+# self[k].set_result(v)
 
-    def __setattr__(self, name, value):
-        if name in Connection.__slots__:
-            super().__setattr__(name, value)
-        else:
-            if self[name].done():
-                self[name] = super().default_factory()
-            self[name].set_result(value)
+# def __getattr__(self, name):
+# if name in self:
+# return self[name].result()
+# else:
+# raise AttributeError(f"{name!r} not in storage")
 
-    def __delattr__(self, name):
-        if name in self:
-            self.pop(name)
+# def __setattr__(self, name, value):
+# if name in Connection.__slots__:
+# super().__setattr__(name, value)
+# else:
+# if self[name].done():
+# self[name] = super().default_factory()
+# self[name].set_result(value)
+
+# def __delattr__(self, name):
+# if name in self:
+# self.pop(name)
+
+
+class Connection:
+    def __init__(
+        self,
+        client_host: str,
+        client_port: int,
+        server_host: str,
+        passive_server_port: int,
+        server_port: int,
+        user: User | None = None,
+        response: Callable | None = None,
+        command_connection: ThrottleStreamIO | None = None,
+        # virtual_path
+        current_directory: pathlib.PurePosixPath | None = None,
+        socket_timeout: float | int | None = None,
+        idle_timeout: float | int | None = None,
+        wait_future_timeout: float | int | None = None,
+        block_size: int = DEFAULT_BLOCK_SIZE,
+        path_io_factory: type[pathio.AbstractPathIO] = pathio.PathIO,
+        path_timeout: float | int | None = None,
+        extra_workers=set(),
+        acquired: bool = False,
+        restart_offset: int = 0,
+        _dispatcher: asyncio.Task | None = None,
+    ):
+        """
+        Connection state container
+        """
+        self.client_host: str = client_host
+        self.client_port: int = client_port
+        self.server_host: str = server_host
+        self.passive_server_port: int = passive_server_port
+        self.server_port: int = server_port
+        self.response: Callable = response
+        self.command_connection: ThrottleStreamIO | None = command_connection
+        self.socket_timeout: float | int | None = socket_timeout
+        self.idle_timeout: float | int | None = idle_timeout
+        self.wait_future_timeout: float | int | None = wait_future_timeout
+        self.block_size: int = block_size
+        self.path_io_factory: type[pathio.AbstractPathIO] = path_io_factory
+        self.path_timeout: float | int | None = path_timeout
+        self.extra_workers = extra_workers
+        self.acquired: bool = acquired
+        self.restart_offset: int = restart_offset
+        self._dispatcher = _dispatcher
+
+        self.logged: bool | None = None
+        # virtual_path
+        self.current_directory: pathlib.PurePosixPath | None = (
+            current_directory
+        )
+        self.path_io: pathio.PathIO = self.path_io_factory(
+            timeout=path_timeout, connection=self
+        )
+
+        self.user: User = user
+        self.passive_server: asyncio.base_events.Server | None = None
+        self.data_connection: ThrottleStreamIO | None = None
+        self.transfer_type: str | None = None
+        self.rename_from: pathlib.Path | None = None
 
 
 class AvailableConnections:
     """
     Semaphore-like object. Have no blocks, only raises ValueError on bounds
-    crossing. If value is :py:class:`None` have no limits (bounds checks).
+    crossing.
 
     :param value:
-    :type value: :py:class:`int` or :py:class:`None`
+    :type value: :py:class:`int`
     """
 
-    def __init__(self, value=None):
+    def __init__(self, value: int = DEFAULT_MAXIMUM_CONNECTIONS_PER_USER):
         self.value = self.maximum_value = value
 
     def locked(self):
@@ -475,27 +535,10 @@ class ConnectionConditions:
     def __call__(self, f):
         @functools.wraps(f)
         async def wrapper(cls, connection: Connection, rest: str, *args):
-            futures = {connection[name]: msg for name, msg in self.fields}
-            aggregate = asyncio.gather(*futures)
-            if self.wait:
-                timeout = connection.wait_future_timeout
-            else:
-                timeout = 0
-
-            try:
-                await asyncio.wait_for(
-                    asyncio.shield(aggregate),
-                    timeout,
-                )
-            except asyncio.TimeoutError:
-                for future, message in futures.items():
-                    if not future.done():
-                        if self.fail_info is None:
-                            info = f"bad sequence of commands ({message})"
-                        else:
-                            info = self.fail_info
-                        connection.response(self.fail_code, info)
-                        return True
+            for name, msg in self.fields:
+                field = getattr(connection, name)
+                if field is None:
+                    return connection.response(self.fail_code, msg)
             return await f(cls, connection, rest, *args)
 
         return wrapper
@@ -730,32 +773,33 @@ class Server:
         self.encoding = encoding
         self.ssl = ssl
         self.commands_mapping = {
-            "abor": self.abor,
-            "appe": self.appe,
-            "cdup": self.cdup,
-            "cwd": self.cwd,
-            "dele": self.dele,
-            "epsv": self.epsv,
-            "list": self.list,
-            "mkd": self.mkd,
-            "mlsd": self.mlsd,
-            "mlst": self.mlst,
-            "pass": self.pass_,
-            "pasv": self.pasv,
-            "pbsz": self.pbsz,
-            "prot": self.prot,
-            "pwd": self.pwd,
-            "quit": self.quit,
-            "rest": self.rest,
-            "retr": self.retr,
-            "rmd": self.rmd,
-            "rnfr": self.rnfr,
-            "rnto": self.rnto,
-            "stor": self.stor,
-            "syst": self.syst,
-            "type": self.type,
-            "user": self.user,
-            "size": self.size,
+            "abor": self.ftp_abor,
+            "appe": self.ftp_appe,
+            "cdup": self.ftp_cdup,
+            "cwd": self.ftp_cwd,
+            "dele": self.ftp_dele,
+            "epsv": self.ftp_epsv,
+            "list": self.ftp_list,
+            "mkd": self.ftp_mkd,
+            "mlsd": self.ftp_mlsd,
+            "mlst": self.ftp_mlst,
+            "pass": self.ftp_pass,
+            "pasv": self.ftp_pasv,
+            "pbsz": self.ftp_pbsz,
+            "prot": self.ftp_prot,
+            "pwd": self.ftp_pwd,
+            "quit": self.ftp_quit,
+            "rest": self.ftp_rest,
+            "retr": self.ftp_retr,
+            "rmd": self.ftp_rmd,
+            "rnfr": self.ftp_rnfr,
+            "rnto": self.ftp_rnto,
+            "stor": self.ftp_stor,
+            "syst": self.ftp_syst,
+            "type": self.ftp_type,
+            "user": self.ftp_user,
+            "size": self.ftp_size,
+            'noop': self.ftp_noop,
         }
 
     async def start(self, host: str | None = None, port: int = 0, **kwargs):
@@ -965,32 +1009,34 @@ class Server:
         )
         response_queue: asyncio.Queue = asyncio.Queue()
         connection = Connection(
-            client_host=host,
-            client_port=port,
-            server_host=current_server_host,
+            client_host=host,  # str
+            client_port=port,  # int
+            server_host=current_server_host,  # str
             passive_server_port=0,
             server_port=self.server_port,
-            command_connection=stream,
-            socket_timeout=self.socket_timeout,
-            idle_timeout=self.idle_timeout,
+            command_connection=stream,  # ThrottleStreamIO
+            socket_timeout=self.socket_timeout,  # Union[float, int, None]
+            idle_timeout=self.idle_timeout,  # Union[float, int, None]
+            # Union[float, int, None]
             wait_future_timeout=self.wait_future_timeout,
-            block_size=self.block_size,
+            block_size=self.block_size,  # int
+            # Type[pathio.AbstractPathIO]
             path_io_factory=self.path_io_factory,
-            path_timeout=self.path_timeout,
+            path_timeout=self.path_timeout,  # Union[float, int, None]
             extra_workers=set(),
             response=lambda *args: response_queue.put_nowait(args),
             acquired=False,
             restart_offset=0,
-            _dispatcher=get_current_task(),
+            _dispatcher=get_current_task(),  # asyncio.Task
         )
-        connection.path_io = self.path_io_factory(
-            timeout=self.path_timeout, connection=connection
-        )
+        # connection.path_io = self.path_io_factory(timeout=self.path_timeout,
+        # connection=connection)
         pending = {
             asyncio.create_task(self.greeting(connection, "")),
             asyncio.create_task(self.response_writer(stream, response_queue)),
             asyncio.create_task(self.parse_command(stream)),
         }
+        # key.__hash__ # for every object
         self.connections[key] = connection
         try:
             while True:
@@ -1000,12 +1046,13 @@ class Server:
                 )
                 connection.extra_workers -= done
                 for task in done:
+                    # print(task) #for debug
                     try:
                         result = task.result()
                     except errors.PathIOError:
                         connection.response("451", "file system error")
                         continue
-                    # this is "command" result
+                    # this is 'command' result
                     if isinstance(result, bool):
                         if not result:
                             await response_queue.join()
@@ -1037,17 +1084,17 @@ class Server:
                 for task in pending | connection.extra_workers:
                     task.cancel()
                     tasks_to_wait.append(task)
-                if connection.future.passive_server.done():
+                if connection.passive_server is not None:
                     connection.passive_server.close()
                     if self.available_data_ports is not None:
                         port = connection.passive_server_port
                         self.available_data_ports.put_nowait((0, port))
-                if connection.future.data_connection.done():
+                if connection.data_connection is not None:
                     connection.data_connection.close()
                 stream.close()
             if connection.acquired:
                 self.available_connections.release()
-            if connection.future.user.done():
+            if connection.user is not None:
                 task = asyncio.create_task(
                     self.user_manager.notify_logout(connection.user)
                 )
@@ -1103,11 +1150,12 @@ class Server:
         connection.response(code, info)
         return ok
 
-    async def user(self, connection: Connection, rest: str):
-        if connection.future.user.done():
+    async def ftp_user(self, connection: Connection, rest: str):
+        if connection.user is not None:  # connection.future.user.done():
             await self.user_manager.notify_logout(connection.user)
-        del connection.user
-        del connection.logged
+
+        connection.user = None  # del connection.user
+        connection.logged = None  # del connection.logged
         state, user, info = await self.user_manager.get_user(rest)
         if state == AbstractUserManager.GetUserResponse.OK:
             code = "230"
@@ -1122,7 +1170,7 @@ class Server:
             message = f"Unknown response {state}"
             raise NotImplementedError(message)
 
-        if connection.future.user.done():
+        if connection.user is not None:  # connection.future.user.done():
             connection.current_directory = connection.user.home_path
             if connection.user not in self.throttle_per_user:
                 throttle = StreamThrottle.from_limits(
@@ -1142,8 +1190,8 @@ class Server:
         return True
 
     @ConnectionConditions(ConnectionConditions.user_required)
-    async def pass_(self, connection: Connection, rest: str):
-        if connection.future.logged.done():
+    async def ftp_pass(self, connection: Connection, rest: str):
+        if connection.logged:  # future.logged.done():
             code, info = "503", "already logged in"
         elif await self.user_manager.authenticate(connection.user, rest):
             connection.logged = True
@@ -1153,12 +1201,12 @@ class Server:
         connection.response(code, info)
         return True
 
-    async def quit(self, connection: Connection, rest: str):
+    async def ftp_quit(self, connection: Connection, rest: str):
         connection.response("221", "bye")
         return False
 
     @ConnectionConditions(ConnectionConditions.login_required)
-    async def pwd(self, connection: Connection, rest: str):
+    async def ftp_pwd(self, connection: Connection, rest: str):
         code, info = "257", f'"{connection.current_directory}"'
         connection.response(code, info)
         return True
@@ -1168,20 +1216,22 @@ class Server:
         PathConditions.path_must_exists, PathConditions.path_must_be_dir
     )
     @PathPermissions(PathPermissions.readable)
-    async def cwd(self, connection: Connection, rest: str):
+    async def ftp_cwd(self, connection: Connection, rest: str):
         real_path, virtual_path = self.get_paths(connection, rest)
         connection.current_directory = virtual_path
         connection.response("250", "")
         return True
 
     @ConnectionConditions(ConnectionConditions.login_required)
-    async def cdup(self, connection: Connection, rest: str):
-        return await self.cwd(connection, connection.current_directory.parent)
+    async def ftp_cdup(self, connection: Connection, rest: str):
+        return await self.ftp_cwd(
+            connection, connection.current_directory.parent
+        )
 
     @ConnectionConditions(ConnectionConditions.login_required)
     @PathConditions(PathConditions.path_must_not_exists)
     @PathPermissions(PathPermissions.writable)
-    async def mkd(self, connection: Connection, rest: str):
+    async def ftp_mkd(self, connection: Connection, rest: str):
         real_path, virtual_path = self.get_paths(connection, rest)
         await connection.path_io.mkdir(real_path, parents=True)
         connection.response("257", "")
@@ -1192,7 +1242,7 @@ class Server:
         PathConditions.path_must_exists, PathConditions.path_must_be_dir
     )
     @PathPermissions(PathPermissions.writable)
-    async def rmd(self, connection: Connection, rest: str):
+    async def ftp_rmd(self, connection: Connection, rest: str):
         real_path, virtual_path = self.get_paths(connection, rest)
         await connection.path_io.rmdir(real_path)
         connection.response("250", "")
@@ -1236,7 +1286,7 @@ class Server:
     )
     @PathConditions(PathConditions.path_must_exists)
     @PathPermissions(PathPermissions.readable)
-    async def mlsd(self, connection: Connection, rest: str):
+    async def ftp_mlsd(self, connection: Connection, rest: str) -> bool:
         @ConnectionConditions(
             ConnectionConditions.data_connection_made,
             wait=True,
@@ -1246,7 +1296,7 @@ class Server:
         @worker
         async def mlsd_worker(self, connection: Connection, rest: str):
             stream = connection.data_connection
-            del connection.data_connection
+            connection.data_connection = None
             async with stream:
                 async for path in connection.path_io.list(real_path):
                     s = await self.build_mlsx_string(connection, path)
@@ -1297,7 +1347,7 @@ class Server:
     )
     @PathConditions(PathConditions.path_must_exists)
     @PathPermissions(PathPermissions.readable)
-    async def list(self, connection: Connection, rest: str):
+    async def ftp_list(self, connection: Connection, rest: str):
         @ConnectionConditions(
             ConnectionConditions.data_connection_made,
             wait=True,
@@ -1307,7 +1357,7 @@ class Server:
         @worker
         async def list_worker(self, connection: Connection, rest: str):
             stream = connection.data_connection
-            del connection.data_connection
+            connection.data_connection = None
             async with stream:
                 async for path in connection.path_io.list(real_path):
                     if not (await connection.path_io.exists(path)):
@@ -1329,7 +1379,7 @@ class Server:
     @ConnectionConditions(ConnectionConditions.login_required)
     @PathConditions(PathConditions.path_must_exists)
     @PathPermissions(PathPermissions.readable)
-    async def mlst(self, connection: Connection, rest: str):
+    async def ftp_mlst(self, connection: Connection, rest: str):
         real_path, virtual_path = self.get_paths(connection, rest)
         s = await self.build_mlsx_string(connection, real_path)
         connection.response("250", ["start", s, "end"], True)
@@ -1338,7 +1388,7 @@ class Server:
     @ConnectionConditions(ConnectionConditions.login_required)
     @PathConditions(PathConditions.path_must_exists)
     @PathPermissions(PathPermissions.writable)
-    async def rnfr(self, connection: Connection, rest: str):
+    async def ftp_rnfr(self, connection: Connection, rest: str):
         real_path, virtual_path = self.get_paths(connection, rest)
         connection.rename_from = real_path
         connection.response("350", "rename from accepted")
@@ -1350,10 +1400,10 @@ class Server:
     )
     @PathConditions(PathConditions.path_must_not_exists)
     @PathPermissions(PathPermissions.writable)
-    async def rnto(self, connection: Connection, rest: str):
+    async def ftp_rnto(self, connection: Connection, rest: str):
         real_path, virtual_path = self.get_paths(connection, rest)
         rename_from = connection.rename_from
-        del connection.rename_from
+        connection.rename_from = None  # del connection.rename_from
         await connection.path_io.rename(rename_from, real_path)
         connection.response("250", "")
         return True
@@ -1363,7 +1413,7 @@ class Server:
         PathConditions.path_must_exists, PathConditions.path_must_be_file
     )
     @PathPermissions(PathPermissions.writable)
-    async def dele(self, connection: Connection, rest: str):
+    async def ftp_dele(self, connection: Connection, rest: str):
         real_path, virtual_path = self.get_paths(connection, rest)
         await connection.path_io.unlink(real_path)
         connection.response("250", "")
@@ -1373,7 +1423,7 @@ class Server:
     @PathConditions(
         PathConditions.path_must_exists, PathConditions.path_must_be_file
     )
-    async def size(self, connection: Connection, rest):
+    async def ftp_size(self, connection: Connection, rest: str):
         if connection.transfer_type == "A":
             connection.response("550", "SIZE not allowed in ASCII mode")
             return True
@@ -1381,13 +1431,19 @@ class Server:
         file_size = await connection.path_io.size(real_path)
         connection.response("213", str(file_size))
         return True
+    
+    @ConnectionConditions(ConnectionConditions.login_required)
+    async def ftp_noop(self, connection: Connection, rest: str):
+        """Do nothing."""
+        connection.response("200", "I successfully did nothing")
+        return True
 
     @ConnectionConditions(
         ConnectionConditions.login_required,
         ConnectionConditions.passive_server_started,
     )
     @PathPermissions(PathPermissions.writable)
-    async def stor(self, connection: Connection, rest: str, mode="wb"):
+    async def ftp_stor(self, connection: Connection, rest: str, mode="wb"):
         @ConnectionConditions(
             ConnectionConditions.data_connection_made,
             wait=True,
@@ -1397,7 +1453,7 @@ class Server:
         @worker
         async def stor_worker(self, connection: Connection, rest: str):
             stream = connection.data_connection
-            del connection.data_connection
+            connection.data_connection = None
             if connection.restart_offset:
                 file_mode = "r+b"
             else:
@@ -1430,7 +1486,7 @@ class Server:
         PathConditions.path_must_exists, PathConditions.path_must_be_file
     )
     @PathPermissions(PathPermissions.readable)
-    async def retr(self, connection: Connection, rest: str):
+    async def ftp_retr(self, connection: Connection, rest: str):
         @ConnectionConditions(
             ConnectionConditions.data_connection_made,
             wait=True,
@@ -1440,7 +1496,7 @@ class Server:
         @worker
         async def retr_worker(self, connection: Connection, rest: str):
             stream = connection.data_connection
-            del connection.data_connection
+            connection.data_connection = None
             file_in = connection.path_io.open(real_path, mode="rb")
             async with file_in, stream:
                 if connection.restart_offset:
@@ -1458,7 +1514,7 @@ class Server:
         return True
 
     @ConnectionConditions(ConnectionConditions.login_required)
-    async def type(self, connection: Connection, rest: str):
+    async def ftp_type(self, connection: Connection, rest: str):
         if rest in ("I", "A"):
             connection.transfer_type = rest
             code, info = "200", ""
@@ -1468,12 +1524,12 @@ class Server:
         return True
 
     @ConnectionConditions(ConnectionConditions.login_required)
-    async def pbsz(self, connection: Connection, rest: str):
+    async def ftp_pbsz(self, connection: Connection, rest: str):
         connection.response("200", "")
         return True
 
     @ConnectionConditions(ConnectionConditions.login_required)
-    async def prot(self, connection: Connection, rest):
+    async def ftp_prot(self, connection: Connection, rest):
         if rest == "P":
             code, info = "200", ""
         else:
@@ -1518,9 +1574,9 @@ class Server:
         return passive_server
 
     @ConnectionConditions(ConnectionConditions.login_required)
-    async def pasv(self, connection: Connection, rest: str):
+    async def ftp_pasv(self, connection: Connection, rest: str):
         async def handler(reader, writer):
-            if connection.future.data_connection.done():
+            if connection.data_connection is not None:
                 writer.close()
             else:
                 connection.data_connection = ThrottleStreamIO(
@@ -1530,7 +1586,7 @@ class Server:
                     timeout=connection.socket_timeout,
                 )
 
-        if not connection.future.passive_server.done():
+        if connection.passive_server is None:
             coro = self._start_passive_server(connection, handler)
             try:
                 connection.passive_server = await coro
@@ -1556,16 +1612,19 @@ class Server:
 
         nums = tuple(map(int, host.split("."))) + (port >> 8, port & 0xFF)
         info.append(f"({','.join(map(str, nums))})")
-        if connection.future.data_connection.done():
+        if connection.data_connection is not None:
             connection.data_connection.close()
-            del connection.data_connection
+            connection.data_connection = None
         connection.response(code, info)
         return True
 
     @ConnectionConditions(ConnectionConditions.login_required)
-    async def epsv(self, connection: Connection, rest: str):
-        async def handler(reader, writer):
-            if connection.future.data_connection.done():
+    async def ftp_epsv(self, connection: Connection, rest: str):
+        async def handler(
+            reader: asyncio.streams.StreamReader,
+            writer: asyncio.streams.StreamWriter,
+        ):
+            if connection.data_connection is not None:
                 writer.close()
             else:
                 connection.data_connection = ThrottleStreamIO(
@@ -1579,7 +1638,7 @@ class Server:
             code, info = "522", ["custom protocols support not implemented"]
             connection.response(code, info)
             return False
-        if not connection.future.passive_server.done():
+        if connection.passive_server is None:
             coro = self._start_passive_server(connection, handler)
             try:
                 connection.passive_server = await coro
@@ -1596,14 +1655,14 @@ class Server:
                 break
 
         info[0] += f" (|||{port}|)"
-        if connection.future.data_connection.done():
+        if connection.data_connection is not None:
             connection.data_connection.close()
-            del connection.data_connection
+            connection.data_connection = None
         connection.response(code, info)
         return True
 
     @ConnectionConditions(ConnectionConditions.login_required)
-    async def abor(self, connection: Connection, rest: str):
+    async def ftp_abor(self, connection: Connection, rest: str):
         if connection.extra_workers:
             for worker in connection.extra_workers:
                 worker.cancel()
@@ -1611,10 +1670,10 @@ class Server:
             connection.response("226", "nothing to abort")
         return True
 
-    async def appe(self, connection: Connection, rest: str):
-        return await self.stor(connection, rest, "ab")
+    async def ftp_appe(self, connection: Connection, rest: str):
+        return await self.ftp_stor(connection, rest, "ab")
 
-    async def rest(self, connection: Connection, rest: str):
+    async def ftp_rest(self, connection: Connection, rest: str):
         if rest.isdigit():
             connection.restart_offset = int(rest)
             connection.response("350", f"restarting at {rest}")
@@ -1624,7 +1683,7 @@ class Server:
             connection.response("501", message)
         return True
 
-    async def syst(self, connection: Connection, rest: str):
+    async def ftp_syst(self, connection: Connection, rest: str):
         """Return system type (always returns UNIX type: L8)."""
         connection.response("215", "UNIX Type: L8")
         return True

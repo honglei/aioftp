@@ -569,11 +569,12 @@ class AsyncPathIO(AbstractPathIO):
     def stat(self, path: pathlib.Path):
         return path.stat()
 
+
     @universal_exception
     @with_timeout
     @_blocking_io
     def size(self, path: pathlib.Path):
-        return os.path.getsize(path)
+        return os.path.getsize(path)    
 
     @universal_exception
     @with_timeout
@@ -812,7 +813,7 @@ class MemoryPathIO(AbstractPathIO):
         else:
             size = 0
         return size
-
+    
     @universal_exception
     async def _open(
         self, path: pathlib.PurePosixPath, mode: str = "rb", *args, **kwargs
