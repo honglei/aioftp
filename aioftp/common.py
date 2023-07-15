@@ -401,12 +401,6 @@ class Throttle:
         self._start = None
         self._sum = 0
 
-    def clone(self):
-        """
-        Clone throttle without memory
-        """
-        return Throttle(limit=self._limit, reset_rate=self.reset_rate)
-
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(limit={self._limit!r}, "
@@ -435,7 +429,10 @@ class StreamThrottle:
         """
         Clone throttles without memory
         """
-        return StreamThrottle(read=self.read.clone(), write=self.write.clone())
+        return StreamThrottle(
+            read_speed_limit=self.read.limit,
+            write_speed_limit=self.write.limit,
+        )
 
 
 class ThrottleStreamIO(StreamIO):
