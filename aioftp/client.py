@@ -645,7 +645,7 @@ class Client(BaseClient):
     :param **siosocks_asyncio_kwargs: siosocks key-word only arguments
     """
 
-    async def connect(self, host: str, port: int = DEFAULT_PORT):
+    async def connect(self, host: str, port: int = DEFAULT_PORT) -> list[str]:
         """
         :py:func:`asyncio.coroutine`
 

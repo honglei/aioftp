@@ -1,5 +1,7 @@
+from __future__ import annotations
 import abc
 import asyncio
+import collections
 import enum
 import errno
 import functools
@@ -11,7 +13,7 @@ import socket
 import stat
 import time
 from typing import Callable
-from collections.abc import Sequence, Iterator, Coroutine
+from collections.abc import Sequence, Iterator, Coroutine, Awaitable
 
 from . import errors, pathio
 from .common import (
@@ -305,74 +307,6 @@ class MemoryUserManager(AbstractUserManager):
         self.available_connections[user].release()
 
 
-# class Connection(collections.defaultdict):
-# """
-# Connection state container for transparent work with futures for async
-# wait
-
-# :param kwargs: initialization parameters
-
-# Container based on :py:class:`collections.defaultdict`, which holds
-# :py:class:`asyncio.Future` as default factory. There is two layers of
-# abstraction:
-
-# * Low level based on simple dictionary keys to attributes mapping and
-# available at Connection.future.
-# * High level based on futures result and dictionary keys to attributes
-# mapping and available at Connection.
-
-# To clarify, here is groups of equal expressions
-# ::
-
-# >>> connection.future.foo
-# >>> connection["foo"]
-
-# >>> connection.foo
-# >>> connection["foo"].result()
-
-# >>> del connection.future.foo
-# >>> del connection.foo
-# >>> del connection["foo"]
-# """
-
-# __slots__ = ("future",)
-
-# class Container:
-
-# def __init__(self, storage):
-# self.storage = storage
-
-# def __getattr__(self, name):
-# return self.storage[name]
-
-# def __delattr__(self, name):
-# self.storage.pop(name)
-
-# def __init__(self, **kwargs):
-# super().__init__(asyncio.Future)
-# self.future = Connection.Container(self)
-# for k, v in kwargs.items():
-# self[k].set_result(v)
-
-# def __getattr__(self, name):
-# if name in self:
-# return self[name].result()
-# else:
-# raise AttributeError(f"{name!r} not in storage")
-
-# def __setattr__(self, name, value):
-# if name in Connection.__slots__:
-# super().__setattr__(name, value)
-# else:
-# if self[name].done():
-# self[name] = super().default_factory()
-# self[name].set_result(value)
-
-# def __delattr__(self, name):
-# if name in self:
-# self.pop(name)
-
-
 class Connection:
     def __init__(
         self,
@@ -426,12 +360,31 @@ class Connection:
         self.path_io: pathio.PathIO = self.path_io_factory(
             timeout=path_timeout, connection=self
         )
-
         self.user: User = user
         self.passive_server: asyncio.base_events.Server | None = None
         self.data_connection: ThrottleStreamIO | None = None
         self.transfer_type: str | None = None
         self.rename_from: pathlib.Path | None = None
+
+        self.current_file_name: str | None = None
+        self.current_file_size: int | None = None
+        self.msg: dict | None = None  # user defined msg, jiang
+
+        self.future = collections.defaultdict(asyncio.Future)
+
+    def set_future(self, name):
+        future = self.future[name]
+        if future.done():
+            future = asyncio.Future()
+        future.set_result(True)
+
+    def get_future(self, name):
+        return self.future[name]
+
+    def clear_future(self, name):
+        if name in self.future:
+            self.future.pop(name)
+        setattr(self, name, None)
 
 
 class AvailableConnections:
@@ -536,10 +489,29 @@ class ConnectionConditions:
     def __call__(self, f):
         @functools.wraps(f)
         async def wrapper(cls, connection: Connection, rest: str, *args):
-            for name, msg in self.fields:
-                field = getattr(connection, name)
-                if field is None:
-                    return connection.response(self.fail_code, msg)
+            futures = {
+                connection.get_future(name): msg for name, msg in self.fields
+            }
+            aggregate = asyncio.gather(*futures)
+            if self.wait:
+                timeout = connection.wait_future_timeout
+            else:
+                timeout = 0
+
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(aggregate),
+                    timeout,
+                )
+            except asyncio.TimeoutError:
+                for future, message in futures.items():
+                    if not future.done():
+                        if self.fail_info is None:
+                            info = f"bad sequence of commands ({message})"
+                        else:
+                            info = self.fail_info
+                        connection.response(self.fail_code, info)
+                        return True
             return await f(cls, connection, rest, *args)
 
         return wrapper
@@ -737,6 +709,14 @@ class Server:
         data_ports: Iterator[int] | None = None,
         encoding: str = "utf-8",
         ssl: SSLContext | None = None,
+        stor_handlers: tuple[
+            Awaitable | None, Awaitable | None, Awaitable | None
+        ]
+        | None = None,
+        retr_handlers: tuple[
+            Awaitable | None, Awaitable | None, Awaitable | None
+        ]
+        | None = None,
     ):
         self.block_size = block_size
         self.socket_timeout = socket_timeout
@@ -757,7 +737,7 @@ class Server:
             self.available_data_ports = None
 
         if isinstance(users, AbstractUserManager):
-            self.user_manager = users
+            self.user_manager: AbstractUserManager = users
         else:
             self.user_manager = MemoryUserManager(users)
 
@@ -775,6 +755,8 @@ class Server:
         self.throttle_per_user: dict[User, StreamThrottle] = {}
         self.encoding: str = encoding
         self.ssl: SSLContext | None = ssl
+        self.stor_handlers = stor_handlers
+        self.retr_handlers = retr_handlers
         self.commands_mapping: dict[str, Coroutine] = {
             "abor": self.ftp_abor,
             "appe": self.ftp_appe,
@@ -953,7 +935,10 @@ class Server:
         line = await stream.readline()
         if not line:
             raise ConnectionResetError
-        s = line.decode(encoding=self.encoding).rstrip()
+        try:
+            s = line.decode(encoding=self.encoding).rstrip()
+        except UnicodeDecodeError:
+            s = line.decode(encoding="gbk").rstrip()
         cmd, _, rest = s.partition(" ")
 
         if cmd.lower() in censor_commands:
@@ -1157,16 +1142,21 @@ class Server:
         if connection.user is not None:  # connection.future.user.done():
             await self.user_manager.notify_logout(connection.user)
 
-        connection.user = None  # del connection.user
-        connection.logged = None  # del connection.logged
+        # connection.user = None  # del connection.user
+        connection.clear_future("user")
+        # connection.logged = None  # del connection.logged
+        connection.clear_future("logged")
         state, user, info = await self.user_manager.get_user(rest)
         if state == AbstractUserManager.GetUserResponse.OK:
             code = "230"
             connection.logged = True
             connection.user = user
+            connection.set_future("logged")
+            connection.set_future("user")
         elif state == AbstractUserManager.GetUserResponse.PASSWORD_REQUIRED:
             code = "331"
             connection.user = user
+            connection.set_future("user")
         elif state == AbstractUserManager.GetUserResponse.ERROR:
             code = "530"
         else:
@@ -1198,6 +1188,7 @@ class Server:
             code, info = "503", "already logged in"
         elif await self.user_manager.authenticate(connection.user, rest):
             connection.logged = True
+            connection.set_future("logged")
             code, info = "230", "normal login"
         else:
             code, info = "530", "wrong password"
@@ -1299,7 +1290,8 @@ class Server:
         @worker
         async def mlsd_worker(self, connection: Connection, rest: str):
             stream = connection.data_connection
-            connection.data_connection = None
+            # connection.data_connection = None
+            connection.clear_future("data_connection")
             async with stream:
                 async for path in connection.path_io.list(real_path):
                     s = await self.build_mlsx_string(connection, path)
@@ -1360,7 +1352,8 @@ class Server:
         @worker
         async def list_worker(self, connection: Connection, rest: str):
             stream = connection.data_connection
-            connection.data_connection = None
+            # connection.data_connection = None
+            connection.clear_future("data_connection")
             async with stream:
                 async for path in connection.path_io.list(real_path):
                     if not (await connection.path_io.exists(path)):
@@ -1394,6 +1387,7 @@ class Server:
     async def ftp_rnfr(self, connection: Connection, rest: str):
         real_path, virtual_path = self.get_paths(connection, rest)
         connection.rename_from = real_path
+        connection.set_future("rename_from")
         connection.response("350", "rename from accepted")
         return True
 
@@ -1406,7 +1400,7 @@ class Server:
     async def ftp_rnto(self, connection: Connection, rest: str):
         real_path, virtual_path = self.get_paths(connection, rest)
         rename_from = connection.rename_from
-        connection.rename_from = None  # del connection.rename_from
+        connection.clear_future("rename_from")  # del connection.rename_from
         await connection.path_io.rename(rename_from, real_path)
         connection.response("250", "")
         return True
@@ -1456,7 +1450,17 @@ class Server:
         @worker
         async def stor_worker(self, connection: Connection, rest: str):
             stream: ThrottleStreamIO = connection.data_connection
-            connection.data_connection = None
+            # connection.data_connection = None
+            connection.clear_future("data_connection")
+            pre = None
+            post = None
+            update = None
+            if self.stor_handlers is not None:
+                pre, update, post = self.stor_handlers
+
+            if isinstance(pre, Callable):
+                real_path, virtual_path = self.get_paths(connection, rest)
+                await pre(connection, virtual_path)
             if connection.restart_offset:
                 file_mode = "r+b"
             else:
@@ -1466,8 +1470,12 @@ class Server:
                 if connection.restart_offset:
                     await file_out.seek(connection.restart_offset)
                 async for data in stream.iter_by_block(connection.block_size):
+                    if isinstance(update, Callable):
+                        await update(connection, len(data))
                     await file_out.write(data)
             connection.response("226", "data transfer done")
+            if isinstance(post, Callable):
+                await post(connection)
             return True
 
         real_path, virtual_path = self.get_paths(connection, rest)
@@ -1499,7 +1507,8 @@ class Server:
         @worker
         async def retr_worker(self, connection: Connection, rest: str):
             stream: ThrottleStreamIO = connection.data_connection
-            connection.data_connection = None
+            # connection.data_connection = None
+            connection.clear_future("data_connection")
             file_in = connection.path_io.open(real_path, mode="rb")
             async with file_in, stream:
                 if connection.restart_offset:
@@ -1588,11 +1597,13 @@ class Server:
                     throttles=connection.command_connection.throttles,
                     timeout=connection.socket_timeout,
                 )
+                connection.set_future("data_connection")
 
         if connection.passive_server is None:
             coro = self._start_passive_server(connection, handler)
             try:
                 connection.passive_server = await coro
+                connection.set_future("passive_server")
             except errors.NoAvailablePort:
                 connection.response("421", ["no free ports"])
                 return False
@@ -1617,7 +1628,8 @@ class Server:
         info.append(f"({','.join(map(str, nums))})")
         if connection.data_connection is not None:
             connection.data_connection.close()
-            connection.data_connection = None
+            # connection.data_connection = None
+            connection.clear_future("data_connection")
         connection.response(code, info)
         return True
 
@@ -1636,6 +1648,7 @@ class Server:
                     throttles=connection.command_connection.throttles,
                     timeout=connection.socket_timeout,
                 )
+                connection.set_future("data_connection")
 
         if rest:
             code, info = "522", ["custom protocols support not implemented"]
@@ -1645,6 +1658,7 @@ class Server:
             coro = self._start_passive_server(connection, handler)
             try:
                 connection.passive_server = await coro
+                connection.set_future("passive_server")
             except errors.NoAvailablePort:
                 connection.response("421", ["no free ports"])
                 return False
@@ -1660,7 +1674,8 @@ class Server:
         info[0] += f" (|||{port}|)"
         if connection.data_connection is not None:
             connection.data_connection.close()
-            connection.data_connection = None
+            # connection.data_connection = None
+            connection.clear_future("data_connection")
         connection.response(code, info)
         return True
 
